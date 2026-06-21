@@ -1,0 +1,1463 @@
+import { useState, useEffect, useMemo, useRef } from "react";
+
+/* =========================================================
+   南海中央鉄道 管理履歴システム / NANTETSU ADMIN RECORDS
+   ※ Discordコミュニティ「南海中央鉄道」の運営管理履歴記録用。
+      実在企業の人事管理・法的人事記録システムではありません。
+========================================================= */
+
+/* ---------------- 状態 ---------------- */
+const STATUSES = ["記録済み", "確認待ち", "対応中", "完了", "保留"];
+const STATUS_META = {
+  "記録済み": { fg: "#4B5563", bg: "#EEF1F4", dot: "#9AA4B2" }, // グレー
+  "確認待ち": { fg: "#1D4FD7", bg: "#E9F0FE", dot: "#2563EB" }, // 青
+  "対応中":   { fg: "#B45309", bg: "#FDF1E3", dot: "#EA8C0C" }, // オレンジ
+  "完了":     { fg: "#13713C", bg: "#E6F5EC", dot: "#1E9E54" }, // 緑
+  "保留":     { fg: "#8A6A07", bg: "#FBF4DD", dot: "#D7A50A" }, // 黄色
+};
+
+/* ---------------- 履歴種別 ---------------- */
+const TYPE_ORDER = ["採用", "警告", "異議申し立て", "休職", "復職", "退職", "権限変更"];
+
+const TYPE_CONFIG = {
+  "採用": {
+    label: "採用履歴", short: "採用",
+    badgeBg: "#E7F4ED", badgeFg: "#16794C", line: "#16794C",
+    numberMode: "auto", prefix: "RES", kubun: "対応区分",
+    order: ["対応日", "対応者", "対象者", "応募役職", "対応区分", "__number__", "対応内容", "理由", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@応募者" },
+      "応募役職": { type: "text", ph: "運行部 など" },
+      "対応区分": { type: "select", options: ["合格", "不合格"] },
+      "対応内容": { type: "textarea", block: true, ph: "実施した対応の内容" },
+      "理由": { type: "textarea", block: true, ph: "判断・対応の理由" },
+      "備考": { type: "textarea", block: true, ph: "通知状況など" },
+    },
+  },
+  "警告": {
+    label: "警告履歴", short: "警告",
+    badgeBg: "#FBE9E9", badgeFg: "#B42318", line: "#B42318",
+    numberMode: "auto", prefix: "WRN", kubun: "警告区分",
+    order: ["対応日", "対応者", "対象者", "警告区分", "__number__", "対応内容", "理由", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@社員" },
+      "警告区分": { type: "select", options: ["W1", "W2", "W3", "W4", "応募権剥奪"] },
+      "対応内容": { type: "textarea", block: true, ph: "警告対応の内容" },
+      "理由": { type: "textarea", block: true, ph: "警告に至った理由" },
+      "備考": { type: "textarea", block: true, ph: "改善期限の案内など" },
+    },
+  },
+  "休職": {
+    label: "休職履歴", short: "休職",
+    badgeBg: "#FBF1DE", badgeFg: "#9A6B05", line: "#C8920C",
+    numberMode: "none", kubun: "対応区分",
+    order: ["対応日", "対応者", "対象者", "対応区分", "休職理由", "休職開始日", "復職予定日", "休職中の連絡可否", "対応内容", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@社員" },
+      "対応区分": { type: "text", ph: "休職開始 / 延長 など" },
+      "休職理由": { type: "textarea", block: true },
+      "休職開始日": { type: "date" },
+      "復職予定日": { type: "date" },
+      "休職中の連絡可否": { type: "select", options: ["可", "不可", "要相談"] },
+      "対応内容": { type: "textarea", block: true },
+      "備考": { type: "textarea", block: true },
+    },
+  },
+  "復職": {
+    label: "復職履歴", short: "復職",
+    badgeBg: "#E3F3F2", badgeFg: "#0E7C74", line: "#11968C",
+    numberMode: "none", kubun: "対応区分",
+    order: ["対応日", "対応者", "対象者", "対応区分", "復職希望日", "今後の活動予定", "活動可能時間", "対応内容", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@社員" },
+      "対応区分": { type: "text", ph: "復職承認 / 保留 など" },
+      "復職希望日": { type: "date" },
+      "今後の活動予定": { type: "textarea", block: true },
+      "活動可能時間": { type: "text", ph: "平日夜 / 週末 など" },
+      "対応内容": { type: "textarea", block: true },
+      "備考": { type: "textarea", block: true },
+    },
+  },
+  "退職": {
+    label: "退職履歴", short: "退職",
+    badgeBg: "#EDEFF2", badgeFg: "#475467", line: "#5A6B7B",
+    numberMode: "none", kubun: "対応区分",
+    order: ["対応日", "対応者", "対象者", "対応区分", "退職理由", "退職希望日", "担当業務", "対応内容", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@社員" },
+      "対応区分": { type: "text", ph: "自己都合 / 会社都合 など" },
+      "退職理由": { type: "textarea", block: true },
+      "退職希望日": { type: "date" },
+      "担当業務": { type: "text", ph: "担当していた業務" },
+      "対応内容": { type: "textarea", block: true },
+      "備考": { type: "textarea", block: true },
+    },
+  },
+  "権限変更": {
+    label: "権限変更履歴", short: "権限変更",
+    badgeBg: "#EFE9FB", badgeFg: "#6638B6", line: "#7C4DD1",
+    numberMode: "manual", prefix: "PRM", kubun: "対応区分",
+    order: ["対応日", "対応者", "対象者", "対応区分", "__number__", "対応内容", "理由", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@管理者" },
+      "対象者": { type: "text", req: true, ph: "@社員" },
+      "対応区分": { type: "text", ph: "昇格 / 降格 / 権限付与 など" },
+      "対応内容": { type: "textarea", block: true },
+      "理由": { type: "textarea", block: true },
+      "備考": { type: "textarea", block: true },
+    },
+  },
+  "異議申し立て": {
+    label: "異議申し立て・報告", short: "異議・報告",
+    badgeBg: "#E7F1FA", badgeFg: "#1F6FB2", line: "#2E80C2",
+    numberMode: "auto", prefix: "OBJ", kubun: "対応区分",
+    note: "警告を出した本人が、その警告に対する異議申し立てを単独で判断することは避けてください。判断が難しい場合は社長へ確認します。",
+    order: ["対応日", "対応者", "対象者", "対応区分", "__number__", "関連管理番号", "申立・報告内容", "聞き取り内容", "対応方針", "対応結果", "備考"],
+    fields: {
+      "対応日": { type: "date", req: true },
+      "対応者": { type: "text", req: true, ph: "@副社長 など" },
+      "対象者": { type: "text", req: true, ph: "@申立者・報告者" },
+      "対応区分": { type: "select", options: ["異議申し立て", "報告", "その他"] },
+      "関連管理番号": { type: "text", ph: "対象の管理番号（例 WRN-0001）" },
+      "申立・報告内容": { type: "textarea", block: true, ph: "異議申し立て・報告の内容" },
+      "聞き取り内容": { type: "textarea", block: true, ph: "関係者への聞き取り結果" },
+      "対応方針": { type: "textarea", block: true, ph: "対応方針の判断" },
+      "対応結果": { type: "textarea", block: true, ph: "対応の結果・決定事項" },
+      "備考": { type: "textarea", block: true },
+    },
+  },
+};
+
+/* ---------------- ヘルパー ---------------- */
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function todayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function fmtDate(s) {
+  if (!s) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? `${m[1]}/${m[2]}/${m[3]}` : s;
+}
+function fmtDT(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function valueKeys(type) {
+  return TYPE_CONFIG[type].order.filter((k) => k !== "__number__");
+}
+function nextNumber(records, prefix) {
+  let max = 0;
+  records.forEach((r) => {
+    if (r.number && r.number.indexOf(prefix + "-") === 0) {
+      const n = parseInt(r.number.slice(prefix.length + 1), 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+  });
+  return `${prefix}-${String(max + 1).padStart(4, "0")}`;
+}
+function buildTemplate(rec) {
+  const cfg = TYPE_CONFIG[rec.type];
+  const lines = [];
+  cfg.order.forEach((key) => {
+    let label, val, block = false;
+    if (key === "__number__") {
+      label = "管理番号";
+      val = rec.number || "";
+    } else {
+      const f = cfg.fields[key];
+      label = key;
+      block = !!f.block;
+      val = f.type === "date" ? fmtDate(rec.values[key] || "") : (rec.values[key] || "");
+    }
+    if (block) {
+      lines.push(`${label}：`);
+      if (val) val.split("\n").forEach((l) => lines.push(l));
+      lines.push("");
+    } else {
+      lines.push(`${label}：${val}`);
+    }
+  });
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+/* ---------------- 役職・権限（担当者／代理担当者制度） ---------------- */
+const ROLE_ORDER = ["社長", "副社長", "専務", "人事部"];
+
+// 各履歴種別を作成・編集できる役職（担当 or 代理）。社長は全業務の最終確認のため全種別を操作可能。
+const PERMISSIONS = {
+  "採用": ["人事部", "専務"],      // 面接：担当 人事部 ／ 代理 専務
+  "警告": ["専務", "副社長"],      // 警告：担当 専務 ／ 代理 副社長
+  "異議申し立て": ["副社長", "専務"], // 異議申し立て・報告：担当 副社長 ／ 代理 専務
+  "休職": ["人事部", "副社長"],    // 退職・休職・復職：担当 人事部 ／ 代理 副社長
+  "復職": ["人事部", "副社長"],
+  "退職": ["人事部", "副社長"],
+  "権限変更": ["人事部", "副社長"], // 役職・所属・権限変更の確認（同上カテゴリ）
+};
+
+const ROLE_DUTY = {
+  "社長": "全業務の最終確認。すべての履歴を作成・編集できます。",
+  "副社長": "警告（代理）／退職・休職・復職・権限変更（代理）／異議申し立て・報告（担当）",
+  "専務": "警告（担当）／採用面接（代理）／異議申し立て・報告（代理）",
+  "人事部": "採用面接（担当）／退職・休職・復職・権限変更（担当）",
+};
+
+function canEditType(role, type) {
+  if (role === "社長") return true;
+  return (PERMISSIONS[type] || []).includes(role);
+}
+function editableTypes(role) {
+  return TYPE_ORDER.filter((t) => canEditType(role, t));
+}
+
+function defaultAccounts() {
+  return {
+    "社長":   { id: "popo120400",         password: "popo12043333",         custom: false },
+    "副社長": { id: "amamiyamaro00",       password: "amamiyamaro0000",      custom: false },
+    "専務":   { id: "gozennocoffee_jp00",  password: "gozennocoffee_jp2222", custom: false },
+    "人事部": { id: "gion1203_7174900",    password: "gion1203_717491111",   custom: false },
+  };
+}
+
+/* ---------------- 初期データ ---------------- */
+function seed() {
+  const t = "2026-06-16T10:00:00.000Z";
+  return {
+    accounts: defaultAccounts(),
+    records: [
+      {
+        id: uid(), type: "採用", number: "RES-0001", status: "完了",
+        createdAt: t, updatedAt: t, createdByRole: "人事部", updatedByRole: "人事部", changes: [],
+        values: {
+          "対応日": "2026-06-16", "対応者": "@管理者", "対象者": "@応募者A",
+          "応募役職": "運行部", "対応区分": "合格",
+          "対応内容": "運行部採用審査を実施し、合格対応を行いました。",
+          "理由": "活動実績および面談結果が良好であったため。",
+          "備考": "本人へ通知済み",
+        },
+      },
+      {
+        id: uid(), type: "警告", number: "WRN-0001", status: "対応中",
+        createdAt: t, updatedAt: t, createdByRole: "専務", updatedByRole: "専務", changes: [],
+        values: {
+          "対応日": "2026-06-16", "対応者": "@管理者", "対象者": "@社員A",
+          "警告区分": "W1",
+          "対応内容": "活動報告未提出のため警告対応を行いました。",
+          "理由": "期限までに報告が提出されなかったため。",
+          "備考": "改善期限案内済み",
+        },
+      },
+    ],
+  };
+}
+
+/* ---------------- アイコン ---------------- */
+function Icon({ name, size = 15 }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" };
+  switch (name) {
+    case "eye": return <svg {...p}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>;
+    case "pencil": return <svg {...p}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>;
+    case "clock": return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
+    case "copy": return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>;
+    case "plus": return <svg {...p}><path d="M12 5v14M5 12h14" /></svg>;
+    case "search": return <svg {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>;
+    case "grid": return <svg {...p}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>;
+    case "list": return <svg {...p}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>;
+    case "x": return <svg {...p}><path d="M18 6 6 18M6 6l12 12" /></svg>;
+    case "lock": return <svg {...p}><rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" /></svg>;
+    case "logout": return <svg {...p}><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 17l-5-5 5-5M4 12h11" /></svg>;
+    case "key": return <svg {...p}><circle cx="7.5" cy="15.5" r="4" /><path d="m10.5 12.5 9-9M16 7l3 3M14 9l2 2" /></svg>;
+    case "down": return <svg {...p}><path d="M12 4v12M6 11l6 6 6-6M4 21h16" /></svg>;
+    case "up": return <svg {...p}><path d="M12 20V8M6 13l6-6 6 6M4 3h16" /></svg>;
+    default: return null;
+  }
+}
+
+function StatusBadge({ status }) {
+  const m = STATUS_META[status] || STATUS_META["記録済み"];
+  return (
+    <span className="badge" style={{ background: m.bg, color: m.fg }}>
+      <span className="dot" style={{ background: m.dot }} />{status}
+    </span>
+  );
+}
+function TypeBadge({ type }) {
+  const c = TYPE_CONFIG[type];
+  return <span className="badge type" style={{ background: c.badgeBg, color: c.badgeFg }}>{c.label}</span>;
+}
+
+/* ---------------- モーダル枠 ---------------- */
+function Modal({ title, accent, onClose, children, footer, wide }) {
+  useEffect(() => {
+    const h = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className={"sheet" + (wide ? " wide" : "")} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="sheet__bar" style={accent ? { background: accent } : undefined} />
+        <div className="sheet__head">
+          <div className="sheet__title">{title}</div>
+          <button className="iconbtn" onClick={onClose} aria-label="閉じる"><Icon name="x" size={18} /></button>
+        </div>
+        <div className="sheet__body">{children}</div>
+        {footer && <div className="sheet__foot">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- 登録／編集フォーム ---------------- */
+function FormModal({ mode, record, records, allowedTypes, currentUser, onSave, onClose }) {
+  const initType = mode === "edit" ? record.type : (allowedTypes[0] || "採用");
+  const buildVals = (type, prev) => {
+    const v = {};
+    valueKeys(type).forEach((k) => { v[k] = (prev && prev[k]) || ""; });
+    if (!v["対応日"]) v["対応日"] = todayStr();
+    return v;
+  };
+  const [type, setType] = useState(initType);
+  const [values, setValues] = useState(() => buildVals(initType, mode === "edit" ? record.values : null));
+  const [status, setStatus] = useState(mode === "edit" ? record.status : "記録済み");
+  const [number, setNumber] = useState(() => {
+    if (mode === "edit") return record.number || "";
+    const c = TYPE_CONFIG[initType];
+    return c.numberMode === "auto" ? nextNumber(records, c.prefix) : "";
+  });
+  const [reason, setReason] = useState("");
+  const [errors, setErrors] = useState({});
+
+  const cfg = TYPE_CONFIG[type];
+
+  const changeType = (t) => {
+    setType(t);
+    setValues((prev) => buildVals(t, prev)); // 共通項目は引き継ぎ
+    const c = TYPE_CONFIG[t];
+    setNumber(c.numberMode === "auto" ? nextNumber(records, c.prefix) : "");
+    setErrors({});
+  };
+  const setVal = (k, val) => setValues((p) => ({ ...p, [k]: val }));
+
+  const submit = () => {
+    const errs = {};
+    valueKeys(type).forEach((k) => {
+      if (cfg.fields[k].req && !String(values[k] || "").trim()) errs[k] = "入力してください";
+    });
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+    onSave({ type, values, status, number, reason });
+  };
+
+  const hasNumberField = cfg.order.includes("__number__");
+
+  return (
+    <Modal
+      wide
+      accent={cfg.line}
+      title={mode === "edit" ? `履歴の編集　${record.number || cfg.label}` : "新規履歴の登録"}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn ghost" onClick={onClose}>キャンセル</button>
+          <button className="btn primary" onClick={submit}>{mode === "edit" ? "変更を保存" : "登録する"}</button>
+        </>
+      }
+    >
+      {Object.keys(errors).length > 0 && (
+        <div className="formerr">未入力の必須項目があります。赤色の項目をご確認ください。</div>
+      )}
+
+      {mode === "create" && (
+        <div className="fld full">
+          <label>履歴種別<span className="opt">あなたの担当のみ</span></label>
+          <div className="pillrow">
+            {allowedTypes.map((t) => (
+              <button key={t} type="button"
+                className={"pill" + (t === type ? " on" : "")}
+                style={t === type ? { background: TYPE_CONFIG[t].badgeFg, borderColor: TYPE_CONFIG[t].badgeFg } : undefined}
+                onClick={() => changeType(t)}>
+                {TYPE_CONFIG[t].label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cfg.note && <div className="typenote">{cfg.note}</div>}
+
+      <div className="form-grid">
+        <div className="fld full">
+          <label>状態</label>
+          <div className="pillrow">
+            {STATUSES.map((s) => {
+              const m = STATUS_META[s];
+              const on = s === status;
+              return (
+                <button key={s} type="button"
+                  className={"pill stat" + (on ? " on" : "")}
+                  style={on ? { background: m.bg, color: m.fg, borderColor: m.dot } : undefined}
+                  onClick={() => setStatus(s)}>
+                  <span className="dot" style={{ background: m.dot }} />{s}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {hasNumberField && (() => {
+          const trimmed = number.trim();
+          const dup = trimmed && records.some((r) => r.number === trimmed && (mode !== "edit" || r.id !== record.id));
+          return (
+            <div className="fld">
+              <label>管理番号<span className="opt">編集可</span></label>
+              <div className="numrow">
+                <input className="mono" value={number}
+                  placeholder={cfg.numberMode === "auto" ? `${cfg.prefix}-0001` : `${cfg.prefix}-0001 など（任意）`}
+                  onChange={(e) => setNumber(e.target.value)} />
+                {cfg.numberMode === "auto" && (
+                  <button type="button" className="numauto" onClick={() => setNumber(nextNumber(records, cfg.prefix))}>自動採番</button>
+                )}
+              </div>
+              {dup
+                ? <span className="numhint warn">この管理番号は他の履歴で既に使われています</span>
+                : (cfg.numberMode === "auto"
+                  ? <span className="numhint">空欄のまま保存すると自動採番されます</span>
+                  : <span className="numhint">未入力でも登録できます</span>)}
+            </div>
+          );
+        })()}
+
+        {valueKeys(type).map((k) => {
+          const f = cfg.fields[k];
+          const full = f.type === "textarea";
+          return (
+            <div key={k} className={"fld" + (full ? " full" : "")}>
+              <label>{k}{f.req && <span className="req">*</span>}</label>
+              {f.type === "textarea" ? (
+                <textarea className={errors[k] ? "bad" : ""} rows={3} value={values[k]} placeholder={f.ph || ""}
+                  onChange={(e) => setVal(k, e.target.value)} />
+              ) : f.type === "select" ? (
+                <select className={errors[k] ? "bad" : ""} value={values[k]} onChange={(e) => setVal(k, e.target.value)}>
+                  <option value="">選択してください</option>
+                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : f.type === "date" ? (
+                <input type="date" className={(errors[k] ? "bad " : "") + "mono"} value={values[k]} onChange={(e) => setVal(k, e.target.value)} />
+              ) : (
+                <input className={errors[k] ? "bad" : ""} value={values[k]} placeholder={f.ph || ""} onChange={(e) => setVal(k, e.target.value)} />
+              )}
+              {errors[k] && <span className="errtext">{errors[k]}</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      {mode === "edit" && (
+        <div className="chgbox">
+          <div className="chgbox__t">変更記録</div>
+          <p className="chgbox__d">この編集は変更履歴として自動的に記録されます。変更者はログイン中の役職として自動で記録されます。</p>
+          <div className="form-grid">
+            <div className="fld">
+              <label>変更者（自動記録）</label>
+              <div className="autonum">{currentUser.role}</div>
+            </div>
+            <div className="fld">
+              <label>変更理由</label>
+              <input value={reason} placeholder="状態更新 / 内容修正 など" onChange={(e) => setReason(e.target.value)} />
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ---------------- ログイン画面 ---------------- */
+function LoginScreen({ accounts, onLogin }) {
+  const [id, setId] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    const role = ROLE_ORDER.find((r) => accounts[r] && accounts[r].id === id.trim() && accounts[r].password === pw);
+    if (!role) { setErr("ログインIDまたはパスワードが正しくありません。"); return; }
+    onLogin({ role, id: id.trim() });
+  };
+  const onKey = (e) => { if (e.key === "Enter") submit(); };
+  return (
+    <div className="login">
+      <div className="login__card">
+        <div className="login__bar" />
+        <div className="login__head">
+          <div className="mark lg">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+              <path d="M6 4.5C6 3 7 2.5 12 2.5s6 .5 6 2V16c0 2-1 3-2.5 3h-7C7 19 6 18 6 16V4.5Z" fill="#0E5A3C" />
+              <rect x="8" y="6" width="8" height="4.6" rx="1.2" fill="#9DE3C0" />
+              <circle cx="9.4" cy="14" r="1.1" fill="#9DE3C0" />
+              <circle cx="14.6" cy="14" r="1.1" fill="#9DE3C0" />
+              <path d="M8.6 19 7 22M15.4 19 17 22" stroke="#0E5A3C" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div>
+            <div className="login__jp">南海中央鉄道　管理履歴システム</div>
+            <div className="login__en">NANTETSU ADMIN RECORDS ・ ログイン</div>
+          </div>
+        </div>
+        <div className="login__body">
+          <p className="login__lead">役職ごとに割り当てられたIDとパスワードでログインしてください。担当する業務の履歴のみ作成・編集できます。</p>
+          {err && <div className="login__err">{err}</div>}
+          <div className="fld">
+            <label>ログインID</label>
+            <input value={id} onChange={(e) => setId(e.target.value)} onKeyDown={onKey} autoComplete="off" placeholder="ログインID" />
+          </div>
+          <div className="fld">
+            <label>パスワード</label>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={onKey} placeholder="パスワード" />
+          </div>
+          <button className="btn login__btn" onClick={submit}>ログイン</button>
+          <p className="login__note">対象役職：社長・副社長・専務・人事部　／　初回は配布された初期パスワードでログインし、ログイン後に各自で変更できます。</p>
+        </div>
+      </div>
+      <div className="login__foot">Discordコミュニティ「南海中央鉄道」運営管理用。実在企業の人事システムではありません。</div>
+    </div>
+  );
+}
+
+/* ---------------- パスワード変更 ---------------- */
+function PasswordModal({ account, role, onSave, onClose }) {
+  const [cur, setCur] = useState("");
+  const [nw, setNw] = useState("");
+  const [cf, setCf] = useState("");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    if (cur !== account.password) { setErr("現在のパスワードが正しくありません。"); return; }
+    if (nw.length < 4) { setErr("新しいパスワードは4文字以上で設定してください。"); return; }
+    if (nw !== cf) { setErr("確認用パスワードが一致しません。"); return; }
+    if (nw === account.password) { setErr("現在と同じパスワードです。別のものを設定してください。"); return; }
+    onSave(nw);
+  };
+  return (
+    <Modal title={`パスワード変更　（${role}）`} onClose={onClose}
+      footer={
+        <>
+          <button className="btn ghost" onClick={onClose}>キャンセル</button>
+          <button className="btn primary" onClick={submit}>変更する</button>
+        </>
+      }>
+      <p className="tpl-note">変更後のパスワードは次回以降のログインで使用します。ログインID（{account.id}）は変更できません。</p>
+      {err && <div className="formerr">{err}</div>}
+      <div className="form-grid">
+        <div className="fld full">
+          <label>現在のパスワード</label>
+          <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} />
+        </div>
+        <div className="fld">
+          <label>新しいパスワード</label>
+          <input type="password" value={nw} onChange={(e) => setNw(e.target.value)} placeholder="4文字以上" />
+        </div>
+        <div className="fld">
+          <label>新しいパスワード（確認）</label>
+          <input type="password" value={cf} onChange={(e) => setCf(e.target.value)} />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ===================================================================== */
+export default function App() {
+  const storage = (typeof window !== "undefined" && window.storage) ? window.storage : null;
+  const [data, setData] = useState(null);
+  const [storageOk, setStorageOk] = useState(true);
+  const [view, setView] = useState("dashboard");
+  const [modal, setModal] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [toast, setToast] = useState("");
+  const toastT = useRef(null);
+  const fileRef = useRef(null);
+  const [currentUser, setCurrentUser] = useState(null); // { role, id } ※リロードで再ログイン
+
+  const [filters, setFilters] = useState({ type: "", q: "", status: "", warn: "", dateFrom: "", dateTo: "" });
+  const [sort, setSort] = useState("upd_desc");
+
+  /* 読み込み */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let loaded = null;
+      if (storage) {
+        try {
+          const res = await storage.get("nantetsu:records");
+          if (res && res.value) loaded = JSON.parse(res.value);
+        } catch (e) { /* 未保存 */ }
+      }
+      if (!alive) return;
+      if (loaded && Array.isArray(loaded.records)) {
+        if (!loaded.accounts) {
+          loaded = { ...loaded, accounts: defaultAccounts() };
+          if (storage) { try { await storage.set("nantetsu:records", JSON.stringify(loaded)); } catch (e) { } }
+        }
+        setData(loaded);
+      } else {
+        const s = seed();
+        setData(s);
+        if (storage) {
+          try { await storage.set("nantetsu:records", JSON.stringify(s)); }
+          catch (e) { setStorageOk(false); }
+        } else setStorageOk(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const persist = async (next) => {
+    setData(next);
+    if (storage) {
+      try { await storage.set("nantetsu:records", JSON.stringify(next)); }
+      catch (e) { setStorageOk(false); }
+    }
+  };
+
+  const showToast = (msg) => {
+    setToast(msg);
+    if (toastT.current) clearTimeout(toastT.current);
+    toastT.current = setTimeout(() => setToast(""), 2200);
+  };
+  const copyText = async (t) => {
+    try { await navigator.clipboard.writeText(t); showToast("コピーしました"); }
+    catch (e) { showToast("コピーできませんでした。手動で選択してください"); }
+  };
+
+  const logout = () => { setCurrentUser(null); setMenuOpen(false); setModal(null); setView("dashboard"); };
+  const changePassword = (newPw) => {
+    const role = currentUser.role;
+    const acc = data.accounts[role];
+    const next = { ...data, accounts: { ...data.accounts, [role]: { ...acc, password: newPw, custom: true } } };
+    persist(next);
+    setModal(null);
+    showToast("パスワードを変更しました");
+  };
+
+  const records = data ? data.records : [];
+
+  const counts = useMemo(() => {
+    const c = { total: records.length };
+    TYPE_ORDER.forEach((t) => (c[t] = 0));
+    records.forEach((r) => { c[r.type] = (c[r.type] || 0) + 1; });
+    return c;
+  }, [records]);
+
+  const filtered = useMemo(() => {
+    const q = filters.q.trim().toLowerCase();
+    let arr = records.filter((r) => {
+      if (filters.type && r.type !== filters.type) return false;
+      if (filters.status && r.status !== filters.status) return false;
+      if (filters.warn && (r.type !== "警告" || r.values["警告区分"] !== filters.warn)) return false;
+      const d = r.values["対応日"] || "";
+      if (filters.dateFrom && d < filters.dateFrom) return false;
+      if (filters.dateTo && d > filters.dateTo) return false;
+      if (q) {
+        const hay = [r.number, ...Object.values(r.values || {})].filter(Boolean).join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const cmp = {
+      upd_desc: (a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""),
+      upd_asc: (a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""),
+      date_desc: (a, b) => (b.values["対応日"] || "").localeCompare(a.values["対応日"] || ""),
+      date_asc: (a, b) => (a.values["対応日"] || "").localeCompare(b.values["対応日"] || ""),
+      num: (a, b) => (a.number || "zzz").localeCompare(b.number || "zzz"),
+    }[sort];
+    return arr.sort(cmp);
+  }, [records, filters, sort]);
+
+  const recentReg = useMemo(
+    () => [...records].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 5),
+    [records]);
+  const recentUpd = useMemo(
+    () => [...records].sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")).slice(0, 5),
+    [records]);
+
+  const filterActive = filters.type || filters.q || filters.status || filters.warn || filters.dateFrom || filters.dateTo;
+
+  /* 保存処理 */
+  const saveForm = (payload) => {
+    const now = new Date().toISOString();
+    if (modal.mode === "create") {
+      if (!canEditType(currentUser.role, payload.type)) { showToast("この種別を作成する権限がありません"); return; }
+      const cfg = TYPE_CONFIG[payload.type];
+      let number = (payload.number || "").trim();
+      if (!number && cfg.numberMode === "auto") number = nextNumber(records, cfg.prefix);
+      const rec = {
+        id: uid(), type: payload.type, number, status: payload.status,
+        values: payload.values, createdAt: now, updatedAt: now,
+        createdByRole: currentUser.role, updatedByRole: currentUser.role, changes: [],
+      };
+      persist({ ...data, records: [rec, ...records] });
+      setModal(null);
+      showToast(number ? `登録しました（${number}）` : "登録しました");
+    } else {
+      const old = records.find((r) => r.id === modal.id);
+      if (!old) { setModal(null); return; }
+      if (!canEditType(currentUser.role, old.type)) { showToast("この履歴を編集する権限がありません"); return; }
+      const cfg = TYPE_CONFIG[old.type];
+      let number = old.number;
+      if (cfg.order.includes("__number__")) number = (payload.number || "").trim();
+      const diffs = [];
+      const fmt = (k, v) => (cfg.fields[k] && cfg.fields[k].type === "date") ? (fmtDate(v) || "（空）") : (v || "（空）");
+      valueKeys(old.type).forEach((k) => {
+        const b = old.values[k] || "", a = payload.values[k] || "";
+        if (b !== a) diffs.push({ label: k, before: fmt(k, b), after: fmt(k, a) });
+      });
+      if ((old.number || "") !== (number || "")) diffs.push({ label: "管理番号", before: old.number || "（空）", after: number || "（空）" });
+      if (old.status !== payload.status) diffs.push({ label: "状態", before: old.status, after: payload.status });
+
+      let changes = old.changes || [];
+      if (diffs.length) {
+        changes = [{
+          ts: now,
+          by: currentUser.role,
+          reason: (payload.reason || "").trim() || "（未記入）",
+          diffs,
+        }, ...changes];
+      }
+      const updated = {
+        ...old, status: payload.status, number, values: payload.values,
+        updatedAt: diffs.length ? now : old.updatedAt,
+        updatedByRole: diffs.length ? currentUser.role : (old.updatedByRole || ""), changes,
+      };
+      persist({ ...data, records: records.map((r) => (r.id === old.id ? updated : r)) });
+      setModal({ kind: "detail", id: old.id });
+      showToast(diffs.length ? "更新しました" : "変更はありませんでした");
+    }
+  };
+
+  /* エクスポート / インポート（履歴データのみ。ログイン情報は端末内に保持され書き出しません） */
+  const exportJSON = () => {
+    const payload = { app: "NANTETSU管理履歴システム", exportedAt: new Date().toISOString(), records: data.records };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `nantetsu-records-${todayStr()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    setMenuOpen(false);
+    showToast("エクスポートしました");
+  };
+  const onImportFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || !Array.isArray(parsed.records)) throw new Error("形式が不正です");
+        persist({ ...data, records: parsed.records });
+        showToast(`${parsed.records.length}件を読み込みました`);
+      } catch (err) {
+        showToast("読み込めませんでした。JSON形式をご確認ください");
+      }
+      setMenuOpen(false);
+    };
+    reader.readAsText(f);
+    e.target.value = "";
+  };
+
+  if (!data) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className="loading"><div className="spin" />読み込み中…</div>
+      </>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <>
+        <style>{css}</style>
+        <LoginScreen accounts={data.accounts} onLogin={(u) => setCurrentUser(u)} />
+      </>
+    );
+  }
+
+  const role = currentUser.role;
+  const myTypes = editableTypes(role);
+  const myAccount = data.accounts[role] || {};
+  const usingDefaultPw = myAccount.custom === false;
+
+  const rec = modal && modal.id ? records.find((r) => r.id === modal.id) : null;
+
+  /* ---- 行（カード）---- */
+  const Row = ({ r }) => {
+    const cfg = TYPE_CONFIG[r.type];
+    const kubun = r.values[cfg.kubun] || "";
+    return (
+      <div className="rec" style={{ borderLeftColor: cfg.line }}>
+        <div className="rec__id">
+          <TypeBadge type={r.type} />
+          <span className="rec__num mono">{r.number || "—"}</span>
+        </div>
+        <div className="rec__main">
+          <button className="rec__target" onClick={() => setModal({ kind: "detail", id: r.id })} title="詳細を表示">
+            {r.values["対象者"] || "（対象者未設定）"}
+          </button>
+          <div className="rec__meta">
+            <span>対応者&nbsp;{r.values["対応者"] || "—"}</span>
+            <span className="sep">・</span>
+            <span className="mono">{fmtDate(r.values["対応日"]) || "—"}</span>
+            {kubun && <><span className="sep">・</span><span className="kubun">{kubun}</span></>}
+          </div>
+        </div>
+        <div className="rec__status">
+          <StatusBadge status={r.status} />
+          <span className="rec__upd">更新 {fmtDT(r.updatedAt)}</span>
+        </div>
+        <div className="rec__actions">
+          <button className="abtn" onClick={() => setModal({ kind: "detail", id: r.id })}><Icon name="eye" />詳細</button>
+          {canEditType(role, r.type)
+            ? <button className="abtn" onClick={() => setModal({ kind: "form", mode: "edit", id: r.id })}><Icon name="pencil" />編集</button>
+            : <span className="abtn lock" title="この履歴はあなたの担当外です"><Icon name="lock" />閲覧のみ</span>}
+          <button className="abtn" onClick={() => setModal({ kind: "history", id: r.id })}>
+            <Icon name="clock" />履歴{r.changes && r.changes.length ? <span className="cnt">{r.changes.length}</span> : null}
+          </button>
+          <button className="abtn" onClick={() => setModal({ kind: "template", id: r.id })}><Icon name="copy" />テンプレ</button>
+        </div>
+      </div>
+    );
+  };
+
+  const MiniRow = ({ r, stamp }) => (
+    <button className="mini" onClick={() => setModal({ kind: "detail", id: r.id })}>
+      <TypeBadge type={r.type} />
+      <span className="mini__num mono">{r.number || "—"}</span>
+      <span className="mini__t">{r.values["対象者"] || "—"}</span>
+      <StatusBadge status={r.status} />
+      <span className="mini__d mono">{stamp}</span>
+    </button>
+  );
+
+  return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        {/* ===== ヘッダー ===== */}
+        <header className="hd">
+          <div className="hd__in">
+            <div className="brand">
+              <div className="mark">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path d="M6 4.5C6 3 7 2.5 12 2.5s6 .5 6 2V16c0 2-1 3-2.5 3h-7C7 19 6 18 6 16V4.5Z" fill="#0E5A3C" />
+                  <rect x="8" y="6" width="8" height="4.6" rx="1.2" fill="#9DE3C0" />
+                  <circle cx="9.4" cy="14" r="1.1" fill="#9DE3C0" />
+                  <circle cx="14.6" cy="14" r="1.1" fill="#9DE3C0" />
+                  <path d="M8.6 19 7 22M15.4 19 17 22" stroke="#0E5A3C" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div className="brand__txt">
+                <div className="brand__jp">南海中央鉄道<span className="brand__sys">管理履歴システム</span></div>
+                <div className="brand__en">NANTETSU ADMIN RECORDS</div>
+              </div>
+            </div>
+
+            <div className="hd__right">
+              <nav className="nav">
+                <button className={"navb" + (view === "dashboard" ? " on" : "")} onClick={() => setView("dashboard")}>
+                  <Icon name="grid" size={15} />ダッシュボード
+                </button>
+                <button className={"navb" + (view === "list" ? " on" : "")} onClick={() => setView("list")}>
+                  <Icon name="list" size={15} />履歴一覧<span className="navcnt">{counts.total}</span>
+                </button>
+              </nav>
+              <button className="btn primary sm" onClick={() => setModal({ kind: "form", mode: "create" })}>
+                <Icon name="plus" size={16} />新規登録
+              </button>
+              <div className="menu-wrap">
+                <button className="userchip" onClick={() => setMenuOpen((o) => !o)}>
+                  <span className="userchip__dot" />
+                  <span className="userchip__role">{role}</span>
+                  <span className="userchip__car">▾</span>
+                </button>
+                {menuOpen && (
+                  <>
+                    <div className="menu-back" onClick={() => setMenuOpen(false)} />
+                    <div className="menu">
+                      <div className="menu__head">
+                        <div className="menu__role">{role}</div>
+                        <div className="menu__id mono">{myAccount.id}</div>
+                      </div>
+                      <button onClick={() => { setMenuOpen(false); setModal({ kind: "password" }); }}><Icon name="key" size={15} />パスワード変更</button>
+                      <div className="menu__sep" />
+                      <button onClick={exportJSON}><Icon name="down" size={15} />エクスポート（JSON）</button>
+                      <button onClick={() => fileRef.current && fileRef.current.click()}><Icon name="up" size={15} />インポート（JSON）</button>
+                      <div className="menu__sep" />
+                      <button className="menu__danger" onClick={logout}><Icon name="logout" size={15} />ログアウト</button>
+                    </div>
+                  </>
+                )}
+                <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImportFile} style={{ display: "none" }} />
+              </div>
+            </div>
+          </div>
+          <div className="platform" />
+        </header>
+
+        <div className="rolebar">
+          <span className="rolebar__role"><span className="rolebar__k">ログイン中</span>{role}</span>
+          <span className="rolebar__duty">
+            編集できる履歴：{myTypes.length ? myTypes.map((t) => TYPE_CONFIG[t].short).join("・") : "なし"}
+            <span className="rolebar__hint">（他の履歴は閲覧のみ）</span>
+          </span>
+          {usingDefaultPw && (
+            <button className="rolebar__pw" onClick={() => setModal({ kind: "password" })}>
+              初期パスワードのままです。変更する →
+            </button>
+          )}
+        </div>
+
+        {!storageOk && (
+          <div className="warnbar">
+            ブラウザ保存が使えないため、データはこのセッション中のみ保持されます。アカウント右の「エクスポート」でバックアップを取ってください。
+          </div>
+        )}
+
+        <main className="main">
+          {view === "dashboard" ? (
+            <>
+              {/* ダッシュボード */}
+              <div className="stat-grid">
+                <div className="stat stat--total">
+                  <div className="stat__lab">総履歴件数</div>
+                  <div className="stat__num mono">{counts.total}</div>
+                  <div className="stat__sub">登録されている全履歴</div>
+                </div>
+                {TYPE_ORDER.map((t) => (
+                  <button key={t} className="stat stat--type"
+                    style={{ "--c": TYPE_CONFIG[t].badgeFg }}
+                    onClick={() => { setFilters({ ...filters, type: t }); setView("list"); }}>
+                    <div className="stat__lab">{TYPE_CONFIG[t].label}</div>
+                    <div className="stat__num mono">{counts[t]}</div>
+                    <div className="stat__sub">件</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="panels">
+                <section className="panel">
+                  <div className="panel__h"><Icon name="plus" size={15} />最近登録された履歴</div>
+                  <div className="panel__b">
+                    {recentReg.length ? recentReg.map((r) => <MiniRow key={r.id} r={r} stamp={fmtDT(r.createdAt)} />)
+                      : <div className="empty sm">まだ履歴がありません。</div>}
+                  </div>
+                </section>
+                <section className="panel">
+                  <div className="panel__h"><Icon name="clock" size={15} />最近更新された履歴</div>
+                  <div className="panel__b">
+                    {recentUpd.length ? recentUpd.map((r) => <MiniRow key={r.id} r={r} stamp={fmtDT(r.updatedAt)} />)
+                      : <div className="empty sm">まだ履歴がありません。</div>}
+                  </div>
+                </section>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* 一覧 + 検索 */}
+              <div className="toolbar">
+                <div className="search">
+                  <Icon name="search" size={16} />
+                  <input placeholder="管理番号・対象者・対応者・内容で検索"
+                    value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+                </div>
+                <div className="filters">
+                  <select value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
+                    <option value="">種別（すべて）</option>
+                    {TYPE_ORDER.map((t) => <option key={t} value={t}>{TYPE_CONFIG[t].label}</option>)}
+                  </select>
+                  <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
+                    <option value="">状態（すべて）</option>
+                    {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <select value={filters.warn} onChange={(e) => setFilters({ ...filters, warn: e.target.value })}>
+                    <option value="">警告区分（すべて）</option>
+                    {TYPE_CONFIG["警告"].fields["警告区分"].options.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                  <label className="datef">対応日
+                    <input type="date" className="mono" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} />
+                  </label>
+                  <span className="tilde">〜</span>
+                  <label className="datef">
+                    <input type="date" className="mono" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} />
+                  </label>
+                  <select value={sort} onChange={(e) => setSort(e.target.value)}>
+                    <option value="upd_desc">更新が新しい順</option>
+                    <option value="upd_asc">更新が古い順</option>
+                    <option value="date_desc">対応日が新しい順</option>
+                    <option value="date_asc">対応日が古い順</option>
+                    <option value="num">管理番号順</option>
+                  </select>
+                  {filterActive && (
+                    <button className="btn ghost sm" onClick={() => setFilters({ type: "", q: "", status: "", warn: "", dateFrom: "", dateTo: "" })}>条件クリア</button>
+                  )}
+                </div>
+                <div className="result">{filtered.length} 件{filterActive && ` / 全 ${records.length} 件`}</div>
+              </div>
+
+              <div className="reclist">
+                {filtered.length ? filtered.map((r) => <Row key={r.id} r={r} />)
+                  : (
+                    <div className="empty">
+                      <div className="empty__t">該当する履歴がありません</div>
+                      <div className="empty__d">{filterActive ? "検索条件を変更するか、条件をクリアしてください。" : "「新規登録」から最初の履歴を追加できます。"}</div>
+                      {!filterActive && <button className="btn primary" onClick={() => setModal({ kind: "form", mode: "create" })}><Icon name="plus" size={16} />新規登録</button>}
+                    </div>
+                  )}
+              </div>
+            </>
+          )}
+
+          <footer className="foot">
+            <span className="foot__b">南海中央鉄道（南鉄 / NANTETSU）</span>
+            このシステムはDiscordコミュニティ「南海中央鉄道」の運営管理履歴を記録するためのものです。実在企業の人事管理システムや法的な人事記録システムではありません。
+          </footer>
+        </main>
+      </div>
+
+      {/* ===== モーダル群 ===== */}
+      {modal && modal.kind === "form" && (
+        <FormModal
+          mode={modal.mode}
+          record={modal.mode === "edit" ? records.find((r) => r.id === modal.id) : null}
+          records={records}
+          allowedTypes={myTypes}
+          currentUser={currentUser}
+          onSave={saveForm}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      {modal && modal.kind === "password" && (
+        <PasswordModal account={myAccount} role={role} onSave={changePassword} onClose={() => setModal(null)} />
+      )}
+
+      {modal && modal.kind === "detail" && rec && (
+        <Modal wide accent={TYPE_CONFIG[rec.type].line}
+          title={<span className="dt-title"><TypeBadge type={rec.type} /><span className="mono dt-num">{rec.number || "—"}</span><StatusBadge status={rec.status} /></span>}
+          onClose={() => setModal(null)}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setModal({ kind: "history", id: rec.id })}><Icon name="clock" />変更履歴</button>
+              <button className="btn ghost" onClick={() => setModal({ kind: "template", id: rec.id })}><Icon name="copy" />テンプレート</button>
+              {canEditType(role, rec.type)
+                ? <button className="btn primary" onClick={() => setModal({ kind: "form", mode: "edit", id: rec.id })}><Icon name="pencil" />編集</button>
+                : <span className="btn ghost lockbtn"><Icon name="lock" />担当外（閲覧のみ）</span>}
+            </>
+          }>
+          <dl className="detail">
+            {TYPE_CONFIG[rec.type].order.map((k) => {
+              if (k === "__number__") {
+                return (
+                  <div className="drow" key="num">
+                    <dt>管理番号</dt><dd className="mono">{rec.number || "—"}</dd>
+                  </div>
+                );
+              }
+              const f = TYPE_CONFIG[rec.type].fields[k];
+              const v = f.type === "date" ? fmtDate(rec.values[k]) : rec.values[k];
+              return (
+                <div className={"drow" + (f.block ? " block" : "")} key={k}>
+                  <dt>{k}</dt>
+                  <dd className={f.block ? "pre" : ""}>{v ? v : <span className="muted">—</span>}</dd>
+                </div>
+              );
+            })}
+            <div className="drow"><dt>状態</dt><dd><StatusBadge status={rec.status} /></dd></div>
+            <div className="drow"><dt>作成者</dt><dd>{rec.createdByRole || <span className="muted">（記録なし）</span>}</dd></div>
+            <div className="drow"><dt>最終更新者</dt><dd>{rec.updatedByRole || <span className="muted">（記録なし）</span>}</dd></div>
+            <div className="drow"><dt>登録日時</dt><dd className="mono">{fmtDT(rec.createdAt)}</dd></div>
+            <div className="drow"><dt>最終更新日時</dt><dd className="mono">{fmtDT(rec.updatedAt)}</dd></div>
+          </dl>
+        </Modal>
+      )}
+
+      {modal && modal.kind === "history" && rec && (
+        <Modal accent={TYPE_CONFIG[rec.type].line}
+          title={`変更履歴　${rec.number || TYPE_CONFIG[rec.type].label}`}
+          onClose={() => setModal(null)}
+          footer={<button className="btn primary" onClick={() => setModal({ kind: "detail", id: rec.id })}>詳細へ戻る</button>}>
+          {rec.changes && rec.changes.length ? (
+            <div className="timeline">
+              {rec.changes.map((c, i) => (
+                <div className="tl" key={i}>
+                  <div className="tl__dot" />
+                  <div className="tl__body">
+                    <div className="tl__top">
+                      <span className="mono tl__ts">{fmtDT(c.ts)}</span>
+                      <span className="tl__by">変更者：{c.by}</span>
+                    </div>
+                    <div className="tl__reason">理由：{c.reason}</div>
+                    <div className="tl__diffs">
+                      {c.diffs.map((d, j) => (
+                        <div className="diff" key={j}>
+                          <span className="diff__k">{d.label}</span>
+                          <span className="diff__b">{d.before}</span>
+                          <span className="diff__arr">→</span>
+                          <span className="diff__a">{d.after}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty sm">この履歴にはまだ変更記録がありません。編集を行うと、変更前後の内容が自動で記録されます。</div>
+          )}
+        </Modal>
+      )}
+
+      {modal && modal.kind === "template" && rec && (() => {
+        const text = buildTemplate(rec);
+        return (
+          <Modal accent={TYPE_CONFIG[rec.type].line}
+            title={`Discord投稿テンプレート　${TYPE_CONFIG[rec.type].label}`}
+            onClose={() => setModal(null)}
+            footer={
+              <>
+                <button className="btn ghost" onClick={() => setModal({ kind: "detail", id: rec.id })}>詳細へ戻る</button>
+                <button className="btn primary" onClick={() => copyText(text)}><Icon name="copy" />全文をコピー</button>
+              </>
+            }>
+            <p className="tpl-note">そのままDiscordへ貼り付けできる形式で生成しています。コピー後に微調整も可能です。</p>
+            <textarea className="tpl mono" readOnly value={text} rows={Math.min(22, text.split("\n").length + 1)}
+              onFocus={(e) => e.target.select()} />
+          </Modal>
+        );
+      })()}
+
+      {toast && <div className="toast">{toast}</div>}
+    </>
+  );
+}
+
+/* ============================ CSS ============================ */
+const css = `
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=Roboto+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --green:#0E5A3C; --green-d:#0A3D29; --green-l:#2E9E6B;
+  --bg:#F3F7F4; --card:#FFFFFF; --ink:#15211C; --ink2:#5A6B63;
+  --line:#DDE7E0; --line2:#EDF2EF;
+  --shadow:0 1px 2px rgba(16,40,30,.05), 0 8px 22px rgba(16,40,30,.05);
+}
+*{box-sizing:border-box}
+.app, .overlay, .loading, .toast{
+  font-family:'Noto Sans JP', system-ui, -apple-system, sans-serif;
+  color:var(--ink);
+}
+.mono{font-family:'Roboto Mono', ui-monospace, SFMono-Regular, monospace; font-variant-numeric:tabular-nums; letter-spacing:.01em;}
+.app{background:var(--bg); min-height:100vh;}
+button{font-family:inherit; cursor:pointer;}
+input,select,textarea{font-family:inherit; font-size:14px; color:var(--ink);}
+textarea{resize:vertical;}
+
+/* loading */
+.loading{min-height:100vh; display:flex; flex-direction:column; gap:14px; align-items:center; justify-content:center; background:var(--bg); color:var(--ink2); font-size:14px;}
+.spin{width:30px;height:30px;border:3px solid #cfe2d7;border-top-color:var(--green);border-radius:50%;animation:sp .8s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* header */
+.hd{position:sticky; top:0; z-index:30; background:linear-gradient(135deg,#0E5A3C,#0A3D29); box-shadow:0 2px 14px rgba(10,40,28,.18);}
+.hd__in{max-width:1180px; margin:0 auto; padding:12px 18px; display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;}
+.brand{display:flex; align-items:center; gap:11px;}
+.mark{width:40px;height:40px;border-radius:11px;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.18);flex:0 0 auto;}
+.brand__jp{color:#fff;font-weight:800;font-size:18px;letter-spacing:.06em;line-height:1.1;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;}
+.brand__sys{font-size:12.5px;font-weight:500;color:#BFE6D2;letter-spacing:.12em;}
+.brand__en{color:#7FC6A2;font-size:10.5px;font-weight:600;letter-spacing:.26em;margin-top:3px;}
+.hd__right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.nav{display:flex;gap:4px;background:rgba(255,255,255,.10);padding:4px;border-radius:11px;}
+.navb{display:flex;align-items:center;gap:6px;border:0;background:transparent;color:#CDE9DA;font-size:13px;font-weight:700;padding:8px 13px;border-radius:8px;transition:.15s;}
+.navb:hover{color:#fff;background:rgba(255,255,255,.10);}
+.navb.on{background:#fff;color:var(--green-d);}
+.navcnt{font-family:'Roboto Mono',monospace;font-size:11px;background:rgba(14,90,60,.14);color:inherit;padding:1px 6px;border-radius:6px;}
+.navb.on .navcnt{background:#E7F1EB;}
+.platform{height:4px;background:repeating-linear-gradient(90deg,#0A3D29 0 14px,#1E9E54 14px 28px);opacity:.85;}
+
+.menu-wrap{position:relative;}
+.menu-back{position:fixed;inset:0;z-index:40;}
+.menu{position:absolute;right:0;top:calc(100% + 8px);z-index:50;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:6px;min-width:236px;}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;color:var(--ink);font-size:13.5px;font-weight:600;padding:10px 11px;border-radius:8px;text-align:left;}
+.menu button:hover{background:var(--line2);color:var(--green);}
+.menu__head{padding:9px 11px 7px;}
+.menu__role{font-weight:800;font-size:14px;color:var(--green-d);}
+.menu__id{font-size:11px;color:var(--ink2);margin-top:2px;word-break:break-all;}
+.menu__sep{height:1px;background:var(--line2);margin:5px 4px;}
+.menu button.menu__danger{color:#B42318;}
+.menu button.menu__danger:hover{background:#FBF0EF;color:#B42318;}
+
+.userchip{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.12);color:#fff;font-size:13px;font-weight:700;padding:8px 12px;border-radius:10px;transition:.15s;}
+.userchip:hover{background:rgba(255,255,255,.2);}
+.userchip__dot{width:8px;height:8px;border-radius:50%;background:#7FE3B4;box-shadow:0 0 0 3px rgba(127,227,180,.25);}
+.userchip__car{font-size:10px;opacity:.85;}
+
+.rolebar{max-width:1180px;margin:12px auto 0;display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 16px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);font-size:12.5px;}
+.rolebar__role{display:inline-flex;align-items:center;gap:8px;font-weight:800;color:var(--green-d);}
+.rolebar__k{font-size:10.5px;font-weight:700;color:#fff;background:var(--green);padding:2px 8px;border-radius:6px;letter-spacing:.04em;}
+.rolebar__duty{color:var(--ink2);font-weight:600;}
+.rolebar__hint{color:#a7b6ac;font-weight:500;margin-left:3px;}
+.rolebar__pw{margin-left:auto;border:1px solid #ECD89B;background:#FBF4DD;color:#8A6A07;font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;transition:.12s;}
+.rolebar__pw:hover{background:#F6EBC6;}
+
+.warnbar{max-width:1180px;margin:12px auto 0;padding:10px 16px;background:#FBF4DD;border:1px solid #ECD89B;color:#8A6A07;border-radius:10px;font-size:12.5px;line-height:1.6;}
+
+/* login */
+.login{min-height:100vh;background:radial-gradient(120% 90% at 50% -10%, #0F6342 0%, #0A3D29 55%, #082E1F 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:26px 16px;}
+.login__card{width:100%;max-width:430px;background:#fff;border-radius:18px;box-shadow:0 24px 70px rgba(0,0,0,.4);overflow:hidden;}
+.login__bar{height:4px;background:repeating-linear-gradient(90deg,#0A3D29 0 14px,#1E9E54 14px 28px);}
+.login__head{display:flex;align-items:center;gap:13px;padding:20px 22px 6px;}
+.mark.lg{width:48px;height:48px;border-radius:13px;}
+.login__jp{font-weight:800;font-size:16.5px;letter-spacing:.04em;color:var(--ink);}
+.login__en{font-size:10px;font-weight:700;letter-spacing:.2em;color:var(--green-l);margin-top:3px;}
+.login__body{padding:14px 22px 24px;}
+.login__lead{font-size:12.5px;color:var(--ink2);line-height:1.7;margin:6px 0 16px;}
+.login__err{background:#FDF1F0;border:1px solid #EDC4BF;color:#B42318;font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:13px;}
+.login .fld{margin-bottom:13px;}
+.login .fld label{font-size:12.5px;font-weight:700;}
+.login .fld input{border:1px solid var(--line);border-radius:10px;padding:11px 13px;width:100%;outline:none;}
+.login .fld input:focus{border-color:var(--green-l);box-shadow:0 0 0 3px rgba(46,158,107,.13);}
+.login__btn{width:100%;justify-content:center;background:var(--green);color:#fff;padding:13px;font-size:15px;margin-top:4px;}
+.login__btn:hover{background:var(--green-d);}
+.login__note{font-size:11px;color:var(--ink2);line-height:1.7;margin:14px 0 0;}
+.login__foot{color:#8FCDAE;font-size:11px;margin-top:20px;text-align:center;max-width:430px;line-height:1.6;}
+
+/* lock states */
+.abtn.lock{color:#9aa7a0;border-style:dashed;background:#FAFCFB;cursor:default;}
+.abtn.lock:hover{border-color:var(--line);background:#FAFCFB;color:#9aa7a0;}
+.lockbtn{color:#9aa7a0 !important;border-style:dashed !important;cursor:default;}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;border:1px solid transparent;border-radius:10px;font-size:14px;font-weight:700;padding:10px 16px;transition:.15s;white-space:nowrap;}
+.btn.sm{padding:9px 13px;font-size:13px;border-radius:9px;}
+.btn.primary{background:#fff;color:var(--green-d);}
+.hd .btn.primary{background:#fff;color:var(--green-d);box-shadow:0 2px 8px rgba(0,0,0,.15);}
+.btn.primary:hover{filter:brightness(.96);transform:translateY(-1px);}
+.sheet__foot .btn.primary,.empty .btn.primary{background:var(--green);color:#fff;}
+.sheet__foot .btn.primary:hover,.empty .btn.primary:hover{background:var(--green-d);}
+.btn.ghost{background:#fff;border-color:var(--line);color:var(--ink);}
+.hd .btn.ghost{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.25);color:#fff;}
+.hd .btn.ghost:hover{background:rgba(255,255,255,.2);}
+.btn.ghost:hover{border-color:#bfd3c8;background:var(--line2);}
+.iconbtn{border:0;background:transparent;color:var(--ink2);width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;}
+.iconbtn:hover{background:var(--line2);color:var(--ink);}
+
+/* main */
+.main{max-width:1180px;margin:0 auto;padding:22px 18px 40px;}
+
+/* stat */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:16px 17px;box-shadow:var(--shadow);text-align:left;position:relative;overflow:hidden;}
+.stat--type{cursor:pointer;transition:.15s;border:0;}
+.stat--type::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c);}
+.stat--type:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(16,40,30,.10);}
+.stat--total{grid-column:span 1;background:linear-gradient(135deg,#0E5A3C,#0A3D29);border:0;color:#fff;}
+.stat__lab{font-size:12.5px;font-weight:700;color:var(--ink2);letter-spacing:.02em;}
+.stat--total .stat__lab{color:#BFE6D2;}
+.stat--type .stat__lab{color:var(--c);}
+.stat__num{font-size:34px;font-weight:600;line-height:1.15;margin-top:4px;}
+.stat--total .stat__num{color:#fff;}
+.stat__sub{font-size:11px;color:var(--ink2);margin-top:2px;}
+.stat--total .stat__sub{color:#8FCDAE;}
+
+/* panels */
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow);overflow:hidden;}
+.panel__h{display:flex;align-items:center;gap:8px;padding:13px 16px;font-weight:800;font-size:14px;color:var(--green-d);border-bottom:1px solid var(--line2);background:#F8FBF9;}
+.panel__b{padding:8px;}
+.mini{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;padding:9px 9px;border-radius:9px;text-align:left;transition:.12s;}
+.mini:hover{background:var(--line2);}
+.mini__num{font-size:11.5px;color:var(--ink2);flex:0 0 auto;}
+.mini__t{flex:1 1 auto;font-size:13.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mini__d{font-size:10.5px;color:var(--ink2);flex:0 0 auto;}
+
+/* badges */
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap;line-height:1.3;}
+.badge.type{padding:3px 9px;font-size:11px;}
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+
+/* toolbar */
+.toolbar{background:var(--card);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow);padding:13px 14px;margin-bottom:14px;}
+.search{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:11px;padding:0 13px;background:#F8FBF9;color:var(--ink2);}
+.search input{border:0;background:transparent;outline:none;padding:11px 0;width:100%;}
+.search svg{flex:0 0 auto;}
+.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px;}
+.filters select{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 10px;font-size:13px;outline:none;}
+.filters select:focus{border-color:var(--green-l);}
+.datef{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2);border:1px solid var(--line);border-radius:9px;padding:5px 9px;background:#fff;}
+.datef input{border:0;outline:none;background:transparent;font-size:12.5px;}
+.tilde{color:var(--ink2);}
+.result{margin-top:10px;font-size:12.5px;color:var(--ink2);font-weight:600;}
+
+/* record rows */
+.reclist{display:flex;flex-direction:column;gap:11px;}
+.rec{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:14px;box-shadow:var(--shadow);padding:14px 16px;transition:.12s;}
+.rec:hover{box-shadow:0 6px 20px rgba(16,40,30,.09);}
+.rec__id{display:flex;flex-direction:column;gap:6px;flex:0 0 auto;min-width:120px;}
+.rec__num{font-size:12.5px;color:var(--ink2);font-weight:600;}
+.rec__main{flex:1 1 220px;min-width:0;}
+.rec__target{border:0;background:transparent;padding:0;font-size:15.5px;font-weight:700;color:var(--ink);text-align:left;display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rec__target:hover{color:var(--green);text-decoration:underline;}
+.rec__meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:4px;font-size:12.5px;color:var(--ink2);}
+.rec__meta .sep{color:#c3d2c9;}
+.kubun{font-weight:700;color:var(--ink);}
+.rec__status{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:0 0 auto;}
+.rec__upd{font-size:10.5px;color:var(--ink2);font-family:'Roboto Mono',monospace;}
+.rec__actions{display:flex;gap:6px;flex:0 0 auto;flex-wrap:wrap;}
+.abtn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:#fff;color:var(--ink);font-size:12.5px;font-weight:600;padding:8px 11px;border-radius:9px;transition:.12s;}
+.abtn:hover{border-color:var(--green-l);background:#EFF7F2;color:var(--green-d);}
+.abtn .cnt{font-family:'Roboto Mono',monospace;font-size:10px;background:#E7F1EB;color:var(--green-d);padding:0 5px;border-radius:5px;margin-left:1px;}
+
+/* empty */
+.empty{text-align:center;padding:54px 20px;background:var(--card);border:1px dashed var(--line);border-radius:15px;}
+.empty__t{font-weight:800;font-size:16px;}
+.empty__d{color:var(--ink2);font-size:13px;margin:7px 0 16px;}
+.empty.sm{padding:26px 18px;color:var(--ink2);font-size:13px;line-height:1.7;border-style:solid;box-shadow:none;}
+
+/* footer */
+.foot{margin-top:26px;padding:16px 18px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink2);line-height:1.7;}
+.foot__b{display:block;font-weight:800;color:var(--green-d);margin-bottom:3px;font-size:12px;letter-spacing:.04em;}
+
+/* overlay / sheet */
+.overlay{position:fixed;inset:0;z-index:100;background:rgba(13,32,24,.5);backdrop-filter:blur(2px);display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;overflow-y:auto;animation:fade .15s ease;}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.sheet{position:relative;width:100%;max-width:560px;background:#fff;border-radius:18px;box-shadow:0 24px 60px rgba(10,30,20,.30);overflow:hidden;animation:pop .18s ease;}
+.sheet.wide{max-width:720px;}
+@keyframes pop{from{transform:translateY(10px);opacity:.6}to{transform:translateY(0);opacity:1}}
+.sheet__bar{height:4px;background:var(--green);}
+.sheet__head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line2);}
+.sheet__title{font-weight:800;font-size:16px;}
+.dt-title{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:14px;}
+.dt-num{font-weight:600;}
+.sheet__body{padding:18px;max-height:66vh;overflow-y:auto;}
+.sheet__foot{display:flex;justify-content:flex-end;gap:9px;padding:13px 18px;border-top:1px solid var(--line2);background:#F8FBF9;flex-wrap:wrap;}
+
+/* form */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
+.fld{display:flex;flex-direction:column;gap:6px;}
+.fld.full{grid-column:1/-1;}
+.fld>label{font-size:12.5px;font-weight:700;color:var(--ink);}
+.req{color:#B42318;margin-left:3px;}
+.fld input,.fld select,.fld textarea{border:1px solid var(--line);border-radius:10px;padding:10px 12px;outline:none;background:#fff;transition:.12s;width:100%;}
+.fld input:focus,.fld select:focus,.fld textarea:focus{border-color:var(--green-l);box-shadow:0 0 0 3px rgba(46,158,107,.13);}
+.fld .bad{border-color:#E5A29B;background:#FDF4F3;}
+.errtext{font-size:11px;color:#B42318;}
+.autonum{border:1px dashed var(--line);border-radius:10px;padding:10px 12px;background:#F8FBF9;color:var(--ink2);font-size:12.5px;}
+.numrow{display:flex;gap:8px;align-items:center;}
+.numrow input{flex:1 1 auto;}
+.numauto{flex:0 0 auto;border:1px solid var(--line);background:#fff;color:var(--green-d);font-size:12px;font-weight:700;padding:9px 13px;border-radius:9px;white-space:nowrap;transition:.12s;}
+.numauto:hover{border-color:var(--green-l);background:#EFF7F2;}
+.numhint{font-size:11px;color:var(--ink2);}
+.numhint.warn{color:#B42318;font-weight:600;}
+.opt{margin-left:7px;font-size:10.5px;font-weight:700;color:var(--green-l);background:#EAF6EF;padding:1px 7px;border-radius:6px;vertical-align:middle;}
+.pillrow{display:flex;flex-wrap:wrap;gap:7px;}
+.pill{border:1px solid var(--line);background:#fff;color:var(--ink2);font-size:12.5px;font-weight:700;padding:8px 13px;border-radius:999px;transition:.12s;display:inline-flex;align-items:center;gap:6px;}
+.pill:hover{border-color:#bfd3c8;}
+.pill.on{color:#fff;}
+.pill.stat.on{font-weight:800;}
+.formerr{background:#FDF1F0;border:1px solid #EDC4BF;color:#B42318;font-size:12.5px;font-weight:600;padding:10px 12px;border-radius:10px;margin-bottom:14px;}
+.typenote{display:flex;gap:8px;background:#FBF6E7;border:1px solid #E8D89B;color:#7A5C0A;font-size:12px;font-weight:600;line-height:1.65;padding:11px 13px;border-radius:11px;margin-bottom:14px;}
+.typenote::before{content:"注意";flex:0 0 auto;font-size:10.5px;font-weight:800;background:#C8920C;color:#fff;padding:2px 8px;border-radius:6px;height:fit-content;letter-spacing:.04em;}
+.chgbox{margin-top:16px;border:1px solid var(--line);border-radius:12px;padding:14px;background:#F8FBF9;}
+.chgbox__t{font-weight:800;font-size:13.5px;color:var(--green-d);}
+.chgbox__d{font-size:11.5px;color:var(--ink2);line-height:1.6;margin:5px 0 11px;}
+
+/* detail */
+.detail{margin:0;}
+.drow{display:grid;grid-template-columns:130px 1fr;gap:14px;padding:11px 4px;border-bottom:1px solid var(--line2);align-items:start;}
+.drow:last-child{border-bottom:0;}
+.drow.block{grid-template-columns:1fr;gap:6px;}
+.drow dt{font-size:12.5px;font-weight:700;color:var(--ink2);}
+.drow dd{margin:0;font-size:14px;font-weight:500;word-break:break-word;}
+.drow.block dt{color:var(--green-d);}
+.pre{white-space:pre-wrap;background:#F8FBF9;border:1px solid var(--line2);border-radius:10px;padding:11px 13px;font-weight:400;line-height:1.7;}
+.muted{color:#b7c4bc;}
+
+/* timeline */
+.timeline{display:flex;flex-direction:column;}
+.tl{display:flex;gap:13px;}
+.tl__dot{width:11px;height:11px;border-radius:50%;background:var(--green);margin-top:5px;flex:0 0 auto;position:relative;}
+.tl:not(:last-child) .tl__dot::after{content:"";position:absolute;left:50%;top:13px;transform:translateX(-50%);width:2px;height:calc(100% + 16px);background:var(--line);}
+.tl__body{flex:1 1 auto;padding-bottom:18px;min-width:0;}
+.tl__top{display:flex;align-items:center;gap:11px;flex-wrap:wrap;}
+.tl__ts{font-size:12.5px;font-weight:600;color:var(--ink);}
+.tl__by{font-size:12px;color:var(--ink2);}
+.tl__reason{font-size:12.5px;color:var(--ink2);margin:4px 0 8px;}
+.tl__diffs{display:flex;flex-direction:column;gap:5px;}
+.diff{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#F8FBF9;border:1px solid var(--line2);border-radius:9px;padding:7px 11px;font-size:12.5px;}
+.diff__k{font-weight:700;min-width:80px;color:var(--green-d);}
+.diff__b{color:#9a5b54;background:#FBF0EF;padding:1px 7px;border-radius:5px;}
+.diff__arr{color:var(--ink2);}
+.diff__a{color:#1d6b41;background:#E9F5EE;padding:1px 7px;border-radius:5px;font-weight:600;}
+
+/* template */
+.tpl-note{font-size:12.5px;color:var(--ink2);line-height:1.6;margin:0 0 11px;}
+.tpl{width:100%;border:1px solid var(--line);border-radius:12px;padding:14px;background:#F8FBF9;line-height:1.7;font-size:13px;outline:none;white-space:pre;}
+.tpl:focus{border-color:var(--green-l);}
+
+/* toast */
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:200;background:var(--green-d);color:#fff;font-size:13px;font-weight:700;padding:12px 20px;border-radius:999px;box-shadow:0 10px 30px rgba(10,30,20,.35);animation:toastin .2s ease;}
+@keyframes toastin{from{transform:translate(-50%,8px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+
+/* focus */
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--green-l);outline-offset:2px;}
+
+/* responsive */
+@media (max-width:900px){
+  .stat-grid{grid-template-columns:repeat(2,1fr);}
+  .panels{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  .hd__in{padding:10px 14px;}
+  .brand__jp{font-size:16px;}
+  .brand__sys{display:none;}
+  .hd__right{width:100%;justify-content:space-between;}
+  .nav{flex:1 1 auto;}
+  .navb{flex:1 1 0;justify-content:center;}
+  .main{padding:16px 13px 36px;}
+  .rec{gap:11px;}
+  .rec__id{flex-direction:row;align-items:center;min-width:0;flex:1 1 100%;justify-content:space-between;}
+  .rec__main{flex:1 1 100%;}
+  .rec__status{flex:1 1 100%;flex-direction:row;align-items:center;justify-content:space-between;}
+  .rec__actions{flex:1 1 100%;}
+  .rec__actions .abtn{flex:1 1 0;justify-content:center;}
+  .form-grid{grid-template-columns:1fr;}
+  .drow{grid-template-columns:1fr;gap:4px;}
+  .filters{gap:7px;}
+  .filters select,.datef{flex:1 1 auto;}
+  .sheet__foot{justify-content:stretch;}
+  .sheet__foot .btn{flex:1 1 0;justify-content:center;}
+}
+@media (max-width:460px){
+  .stat-grid{grid-template-columns:1fr 1fr;}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important; transition:none !important;}
+}
+`;
